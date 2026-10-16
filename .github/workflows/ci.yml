@@ -33,6 +33,12 @@ jobs:
         name: Build and test installer
         shell: pwsh
         run: ./scripts/build-installer.ps1
+      - if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-diagnostics
+          path: dist/*-preview.png
+          if-no-files-found: ignore
       - if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:

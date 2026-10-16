@@ -117,6 +117,8 @@ pub fn number_icon(load: Option<u32>, size: i32, warning: u32) -> AppResult<Numb
             }
             SelectObject(dc, old_font);
             DeleteObject(font);
+            // CreateIconIndirect may select these bitmaps into its own DC.
+            SelectObject(dc, old_bitmap);
             icon = CreateIconIndirect(&ICONINFO {
                 fIcon: 1,
                 xHotspot: 0,

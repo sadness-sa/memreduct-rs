@@ -31,8 +31,8 @@ public static class NativeUi {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr hwnd, int id);
   [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW")] public static extern IntPtr GetWindowLong(IntPtr hwnd, int index);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool SetWindowText(IntPtr hwnd, string text);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int count);
+  [DllImport("user32.dll", EntryPoint="SendMessageW", ExactSpelling=true, CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr SendText(IntPtr hwnd, uint msg, IntPtr wp, string text);
+  [DllImport("user32.dll", EntryPoint="SendMessageW", ExactSpelling=true, CharSet=CharSet.Unicode)] public static extern IntPtr ReadText(IntPtr hwnd, uint msg, IntPtr capacity, StringBuilder text);
 }
 '@
     $window = $process.MainWindowHandle
@@ -66,12 +66,12 @@ public static class NativeUi {
     $threshold = [NativeUi]::GetDlgItem($window, 200)
     if ($threshold -eq [IntPtr]::Zero) { throw 'Settings must open inside the main window' }
     Capture-Window 'settings-preview.png'
-    [NativeUi]::SetWindowText($threshold, '100') | Out-Null
+    [NativeUi]::SendText($threshold, 0x000c, [IntPtr]::Zero, '100') | Out-Null
     [NativeUi]::SendMessage($window, 0x0111, [IntPtr]310, [IntPtr]::Zero) | Out-Null
     $text = New-Object Text.StringBuilder 256
-    [NativeUi]::GetWindowText([NativeUi]::GetDlgItem($window, 220), $text, $text.Capacity) | Out-Null
-    if ($text.ToString() -notmatch '50..99') { throw 'Settings did not reject invalid threshold' }
-    [NativeUi]::SetWindowText($threshold, '90') | Out-Null
+    [NativeUi]::ReadText([NativeUi]::GetDlgItem($window, 220), 0x000d, [IntPtr]$text.Capacity, $text) | Out-Null
+    if ($text.ToString() -notmatch '50..99') { throw "Settings did not reject invalid threshold: $($text.ToString())" }
+    [NativeUi]::SendText($threshold, 0x000c, [IntPtr]::Zero, '90') | Out-Null
     [NativeUi]::SendMessage($window, 0x0111, [IntPtr]310, [IntPtr]::Zero) | Out-Null
     if ([NativeUi]::GetDlgItem($window, 200) -ne [IntPtr]::Zero) { throw 'Saving settings must restore overview' }
     $config = Get-Content (Join-Path $env:LOCALAPPDATA 'MemReductRs/config.toml') -Raw
