@@ -1,5 +1,5 @@
 //! Pure, deterministic policy; caller supplies monotonic seconds, never wall-clock time.
-use crate::config::Config;
+use crate::config::{AutoTrigger, Config};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trigger {
@@ -31,14 +31,16 @@ impl AutoPolicy {
             self.armed = true;
             return None;
         }
-        if load
+        if config.auto_trigger == AutoTrigger::Interval {
+            self.high_since = None;
+        } else if load
             <= config
                 .threshold_percent
                 .saturating_sub(config.hysteresis_percent)
         {
             self.armed = true;
         }
-        if load < config.threshold_percent {
+        if config.auto_trigger == AutoTrigger::Interval || load < config.threshold_percent {
             self.high_since = None;
         } else if self.high_since.is_none() {
             self.high_since = Some(now);
@@ -57,7 +59,8 @@ impl AutoPolicy {
         {
             return Some(Trigger::Pressure);
         }
-        if config.interval_seconds > 0
+        if config.auto_trigger != AutoTrigger::Memory
+            && config.interval_seconds > 0
             && now.saturating_sub(self.interval_anchor) >= config.interval_seconds
         {
             return Some(Trigger::Interval);
@@ -114,12 +117,30 @@ mod tests {
         c.auto_enabled = false;
         assert_eq!(p.observe(&c, 100, 99, false), None);
         c.auto_enabled = true;
+        c.auto_trigger = AutoTrigger::Either;
         c.interval_seconds = 60;
         assert_eq!(p.observe(&c, 159, 20, false), None);
         assert_eq!(p.observe(&c, 160, 20, false), Some(Trigger::Interval));
         p.attempted(160);
         assert_eq!(p.observe(&c, 220, 20, false), None);
         assert_eq!(p.observe(&c, 460, 20, false), Some(Trigger::Interval));
+    }
+    #[test]
+    fn memory_only_ignores_timer_and_interval_only_ignores_pressure() {
+        let mut c = config();
+        c.interval_seconds = 60;
+        c.auto_trigger = AutoTrigger::Memory;
+        let mut policy = AutoPolicy::new(0);
+        assert_eq!(policy.observe(&c, 300, 20, false), None);
+        c.auto_trigger = AutoTrigger::Interval;
+        let mut policy = AutoPolicy::new(0);
+        policy.observe(&c, 0, 99, false);
+        assert_eq!(policy.observe(&c, 10, 99, false), None);
+        assert_eq!(policy.observe(&c, 60, 99, false), Some(Trigger::Interval));
+        c.auto_trigger = AutoTrigger::Either;
+        let mut policy = AutoPolicy::new(0);
+        policy.observe(&c, 0, 99, false);
+        assert_eq!(policy.observe(&c, 10, 99, false), Some(Trigger::Pressure));
     }
     #[test]
     fn manual_attempt_delays_auto_and_recovery_does_not_bypass_cooldown() {

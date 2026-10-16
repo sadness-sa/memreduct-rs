@@ -1,6 +1,8 @@
 # Normal install: %LOCALAPPDATA%\MemReductRs\config.toml
 # Optional --portable: memreduct-rs.toml beside executables, in a writable folder.
 auto_enabled = false
+# memory, interval or either (OR). Interval needs interval_seconds >= 60.
+auto_trigger = "memory"
 threshold_percent = 85
 hysteresis_percent = 10
 sustained_seconds = 10
@@ -16,3 +18,13 @@ minimum_working_set_mib = 32
 process_exclusions = ["obs64.exe", "obs32.exe"]
 start_minimized = false
 hotkey_enabled = true
+
+# Tray thresholds are independent from the cleanup threshold.
+[tray]
+dynamic_background = true
+warning_percent = 85
+danger_percent = 94
+normal_background = "#3F69ED"
+warning_background = "#C5880D"
+danger_background = "#E04C34"
+text_color = "#FFFFFF"

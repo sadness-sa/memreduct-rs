@@ -3,7 +3,7 @@
 fn main() {}
 #[cfg(windows)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use memreduct_rs::{platform::wide, tray::number_icon};
+    use memreduct_rs::{config::TraySettings, platform::wide, tray::number_icon};
     use std::{
         io::Write,
         mem::{size_of, zeroed},
@@ -72,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 DT_VCENTER | DT_SINGLELINE,
             );
             for (col, value) in [0, 9, 70, 85, 100].iter().copied().enumerate() {
-                let icon = number_icon(Some(value), size, 85)?;
+                let icon = number_icon(Some(value), size, &TraySettings::default())?;
                 DrawIconEx(
                     dc,
                     80 + col as i32 * 52,

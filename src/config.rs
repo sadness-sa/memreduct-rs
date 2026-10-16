@@ -7,10 +7,105 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoTrigger {
+    Memory,
+    Interval,
+    // Older configurations already used OR semantics when interval_seconds > 0.
+    #[default]
+    Either,
+}
+
+impl AutoTrigger {
+    pub const ALL: [Self; 3] = [Self::Memory, Self::Interval, Self::Either];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Memory => "按内存占用",
+            Self::Interval => "按时间间隔",
+            Self::Either => "任一条件",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TraySettings {
+    pub dynamic_background: bool,
+    pub warning_percent: u32,
+    pub danger_percent: u32,
+    pub normal_background: String,
+    pub warning_background: String,
+    pub danger_background: String,
+    pub text_color: String,
+}
+impl Default for TraySettings {
+    fn default() -> Self {
+        Self {
+            dynamic_background: true,
+            warning_percent: 85,
+            danger_percent: 94,
+            normal_background: "#3F69ED".into(),
+            warning_background: "#C5880D".into(),
+            danger_background: "#E04C34".into(),
+            text_color: "#FFFFFF".into(),
+        }
+    }
+}
+impl TraySettings {
+    pub fn validate(&self) -> AppResult<()> {
+        if !(1..=99).contains(&self.warning_percent)
+            || self.danger_percent > 100
+            || self.danger_percent <= self.warning_percent
+        {
+            return Err("托盘阈值须满足 1 ≤ 警告 < 危险 ≤ 100".into());
+        }
+        for color in [
+            &self.normal_background,
+            &self.warning_background,
+            &self.danger_background,
+            &self.text_color,
+        ] {
+            parse_color(color)?;
+        }
+        Ok(())
+    }
+    pub fn background(&self, load: Option<u32>) -> AppResult<u32> {
+        let color = if self.dynamic_background && load.is_some_and(|p| p >= self.danger_percent) {
+            &self.danger_background
+        } else if self.dynamic_background && load.is_some_and(|p| p >= self.warning_percent) {
+            &self.warning_background
+        } else {
+            &self.normal_background
+        };
+        parse_color(color)
+    }
+}
+
+/// Parse #RRGGBB into the COLORREF byte order required by Win32, on any host.
+pub fn parse_color(color: &str) -> AppResult<u32> {
+    let value = color
+        .strip_prefix('#')
+        .filter(|v| v.len() == 6 && v.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| format!("颜色须为 #RRGGBB，例如 #3F69ED：{color}"))?;
+    let rgb = u32::from_str_radix(value, 16).map_err(|e| e.to_string())?;
+    Ok(((rgb >> 16) & 255) | (rgb & 0xff00) | ((rgb & 255) << 16))
+}
+pub fn color_hex(colorref: u32) -> String {
+    format!(
+        "#{:02X}{:02X}{:02X}",
+        colorref & 255,
+        (colorref >> 8) & 255,
+        (colorref >> 16) & 255
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub auto_enabled: bool,
+    #[serde(default)]
+    pub auto_trigger: AutoTrigger,
     pub threshold_percent: u32,
     pub hysteresis_percent: u32,
     pub sustained_seconds: u64,
@@ -23,12 +118,14 @@ pub struct Config {
     pub process_exclusions: Vec<String>,
     pub start_minimized: bool,
     pub hotkey_enabled: bool,
+    pub tray: TraySettings,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             auto_enabled: false,
+            auto_trigger: AutoTrigger::Memory,
             threshold_percent: 85,
             hysteresis_percent: 10,
             sustained_seconds: 10,
@@ -41,12 +138,17 @@ impl Default for Config {
             process_exclusions: vec!["obs64.exe".into(), "obs32.exe".into()],
             start_minimized: false,
             hotkey_enabled: true,
+            tray: TraySettings::default(),
         }
     }
 }
 
 impl Config {
     pub fn validate(&self) -> AppResult<()> {
+        self.tray.validate()?;
+        if self.auto_trigger == AutoTrigger::Interval && self.interval_seconds == 0 {
+            return Err("按时间清理需要设置至少 60 秒的间隔".into());
+        }
         if self.auto_profile == Profile::Aggressive {
             return Err("自动清理不允许 aggressive 全局深度清理".into());
         }
@@ -165,11 +267,41 @@ pub fn append_report(path: &Path, report: &crate::model::CleanReport) -> AppResu
 mod tests {
     use super::*;
     #[test]
+    fn tray_palette_thresholds_and_color_formats_are_validated() {
+        let mut tray = TraySettings::default();
+        assert_eq!(
+            tray.background(Some(84)).unwrap(),
+            parse_color("#3F69ED").unwrap()
+        );
+        assert_eq!(
+            tray.background(Some(85)).unwrap(),
+            parse_color("#C5880D").unwrap()
+        );
+        assert_eq!(
+            tray.background(Some(94)).unwrap(),
+            parse_color("#E04C34").unwrap()
+        );
+        tray.dynamic_background = false;
+        assert_eq!(
+            tray.background(Some(100)).unwrap(),
+            tray.background(None).unwrap()
+        );
+        tray.danger_percent = tray.warning_percent;
+        assert!(tray.validate().is_err());
+        for invalid in ["FFFFFF", "#FFF", "#ZZ0000", "#0000000"] {
+            assert!(parse_color(invalid).is_err());
+        }
+        assert_eq!(color_hex(parse_color("#AbCDeF").unwrap()), "#ABCDEF");
+    }
+    #[test]
     fn legacy_config_gets_safe_new_options_and_aggressive_auto_is_rejected() {
         let mut config: Config = toml::from_str("manual_profile = 'conservative'").unwrap();
         assert_eq!(config.manual_profile, Profile::Conservative);
         assert_eq!(config.auto_profile, Profile::Smart);
         assert!(config.skip_fullscreen);
+        assert_eq!(config.auto_trigger, AutoTrigger::Either);
+        let legacy: Config = toml::from_str("interval_seconds = 60").unwrap();
+        assert_eq!(legacy.auto_trigger, AutoTrigger::Either);
         config.auto_profile = Profile::Aggressive;
         assert!(config.validate().is_err());
         config.auto_profile = Profile::Balanced;

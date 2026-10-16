@@ -1,4 +1,4 @@
-# v0.3 开发需求与后续计划
+# v0.4 开发需求与后续计划
 
 ## 用户目标
 
@@ -22,6 +22,10 @@
 | F12 | 可视化设置、现代卡片界面、管理员安装器与卸载 | `settings.rs`、`ui.rs`、`installer/` |
 | F13 | 一体化无系统标题栏界面与内嵌设置，数字托盘 | `ui.rs`、`settings.rs`、`tray.rs` |
 | F14 | 智能选策与 7 种手动策略，展示选策理由 | `strategy.rs`、`model.rs` |
+
+| F15 | 托盘背景/文字配色、独立变色阈值与选色器 | `config.rs`、`settings.rs`、`tray.rs` |
+| F16 | 可视化选择时间/内存/任一条件触发 | `policy.rs`、`settings.rs` |
+| F17 | 识别旧路径、跳过目录选择直接更新 | `installer/`、`scripts/build-installer.ps1` |
 
 以上“实现”指源码路径已具备，运行验收状态以 `VALIDATION.md` 为准。
 

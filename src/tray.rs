@@ -1,5 +1,6 @@
 //! Numeric notification icon, following Mem Reduct's runtime text -> bitmap -> HICON design.
 use crate::{
+    config::{parse_color, TraySettings},
     platform::{os_error, wide},
     AppResult,
 };
@@ -18,7 +19,10 @@ impl Drop for NumberIcon {
     }
 }
 
-pub fn number_icon(load: Option<u32>, size: i32, warning: u32) -> AppResult<NumberIcon> {
+pub fn number_icon(load: Option<u32>, size: i32, settings: &TraySettings) -> AppResult<NumberIcon> {
+    settings.validate()?;
+    let color = settings.background(load)?;
+    let text_color = parse_color(&settings.text_color)?;
     let size = size.clamp(16, 64);
     let label = load
         .map(|v| v.min(100).to_string())
@@ -50,11 +54,6 @@ pub fn number_icon(load: Option<u32>, size: i32, warning: u32) -> AppResult<Numb
             return Err(os_error("创建数字托盘位图"));
         }
         let old_bitmap = SelectObject(dc, bitmap);
-        let color = match load {
-            Some(v) if v >= 94 => 0x00344ce0,
-            Some(v) if v >= warning => 0x000d88c5,
-            _ => 0x00ed693f,
-        };
         let brush = CreateSolidBrush(color);
         let mut rect = RECT {
             left: 0,
@@ -64,7 +63,7 @@ pub fn number_icon(load: Option<u32>, size: i32, warning: u32) -> AppResult<Numb
         };
         FillRect(dc, &rect, brush);
         DeleteObject(brush);
-        SetTextColor(dc, 0x00ffffff);
+        SetTextColor(dc, text_color);
         SetBkMode(dc, TRANSPARENT as i32);
         let mut height = size - 1;
         let mut font;
@@ -146,7 +145,7 @@ mod tests {
     fn numeric_icons_cover_dpi_sizes_and_all_digit_counts() {
         for size in [16, 24, 32] {
             for load in [None, Some(0), Some(9), Some(85), Some(100)] {
-                let icon = number_icon(load, size, 85).unwrap();
+                let icon = number_icon(load, size, &TraySettings::default()).unwrap();
                 unsafe {
                     let mut info: ICONINFO = zeroed();
                     assert_ne!(GetIconInfo(icon.0, &mut info), 0);

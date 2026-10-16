@@ -72,10 +72,33 @@ public static class NativeUi {
     [NativeUi]::ReadText([NativeUi]::GetDlgItem($window, 220), 0x000d, [IntPtr]$text.Capacity, $text) | Out-Null
     if ($text.ToString() -notmatch '50..99') { throw "Settings did not reject invalid threshold: $($text.ToString())" }
     [NativeUi]::SendText($threshold, 0x000c, [IntPtr]::Zero, '90') | Out-Null
+    [NativeUi]::SendMessage($window, 0x0111, [IntPtr]341, [IntPtr]::Zero) | Out-Null
+    [NativeUi]::SendText([NativeUi]::GetDlgItem($window, 205), 0x000c, [IntPtr]::Zero, '120') | Out-Null
+    Capture-Window 'settings-preview.png'
+    [NativeUi]::SendMessage($window, 0x0111, [IntPtr]401, [IntPtr]::Zero) | Out-Null
+    [NativeUi]::SendText([NativeUi]::GetDlgItem($window, 230), 0x000c, [IntPtr]::Zero, '70') | Out-Null
+    [NativeUi]::SendText([NativeUi]::GetDlgItem($window, 231), 0x000c, [IntPtr]::Zero, '90') | Out-Null
+    [NativeUi]::SendText([NativeUi]::GetDlgItem($window, 240), 0x000c, [IntPtr]::Zero, '#NOPE00') | Out-Null
+    [NativeUi]::SendMessage($window, 0x0111, [IntPtr]310, [IntPtr]::Zero) | Out-Null
+    $colorError = New-Object Text.StringBuilder 256
+    [NativeUi]::ReadText([NativeUi]::GetDlgItem($window, 220), 0x000d, [IntPtr]$colorError.Capacity, $colorError) | Out-Null
+    if ($colorError.ToString() -notmatch '#RRGGBB') { throw 'Settings did not reject invalid color' }
+    [NativeUi]::SendText([NativeUi]::GetDlgItem($window, 240), 0x000c, [IntPtr]::Zero, '#112233') | Out-Null
+    Capture-Window 'appearance-preview.png'
+    [NativeUi]::SendMessage([NativeUi]::GetDlgItem($window, 331), 0x00f5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
     [NativeUi]::SendMessage($window, 0x0111, [IntPtr]310, [IntPtr]::Zero) | Out-Null
     if ([NativeUi]::GetDlgItem($window, 200) -ne [IntPtr]::Zero) { throw 'Saving settings must restore overview' }
     $config = Get-Content (Join-Path $env:LOCALAPPDATA 'MemReductRs/config.toml') -Raw
     if ($config -notmatch 'threshold_percent = 90' -or $config -notmatch 'auto_profile = "smart"') { throw 'Saved settings are incorrect' }
+    if ($config -notmatch 'auto_trigger = "interval"' -or $config -notmatch 'interval_seconds = 120') { throw 'Time trigger settings did not persist' }
+    if ($config -notmatch 'dynamic_background = false' -or $config -notmatch 'warning_percent = 70' -or $config -notmatch '#112233') { throw 'Tray appearance settings did not persist' }
+    [NativeUi]::SendMessage($window, 0x0111, [IntPtr]104, [IntPtr]::Zero) | Out-Null
+    [NativeUi]::SendMessage($window, 0x0111, [IntPtr]401, [IntPtr]::Zero) | Out-Null
+    [NativeUi]::SendMessage([NativeUi]::GetDlgItem($window, 331), 0x00f5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+    [NativeUi]::SendMessage($window, 0x0111, [IntPtr]310, [IntPtr]::Zero) | Out-Null
+    $config = Get-Content (Join-Path $env:LOCALAPPDATA 'MemReductRs/config.toml') -Raw
+    if ($config -notmatch 'dynamic_background = true') { throw 'Dynamic tray colors could not be re-enabled' }
+
     [NativeUi]::SendMessage($window, 0x0111, [IntPtr]109, [IntPtr]::Zero) | Out-Null
     [NativeUi]::SendMessage($window, 0x0111, [IntPtr]108, [IntPtr]::Zero) | Out-Null
     [NativeUi]::SendMessage($window, 0x8004, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null

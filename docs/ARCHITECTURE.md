@@ -1,5 +1,15 @@
 # 架构与参考实现
 
+## v0.4 新增
+
+- `Config.auto_trigger` 显式区分 memory/interval/either；旧文件缺少此字段时使用 either 保留旧版 OR 语义，新配置默认 memory。
+- `TraySettings` 保存动态开关、独立阈值和四种 #RRGGBB 颜色，统一校验并转换成 COLORREF；运行时和选色器使用相同颜色解析。
+- 设置页使用三个标签页，控件保持存在、按页显隐，避免切换时丢失未保存内容。
+- 安装器在 .onInit 中显式 ReadRegStr 并验证安装目录，更新时通过 MUI_PAGE_CUSTOMFUNCTION_PRE 跳过引导和目录页；不能依赖 InstallDirRegKey 读取 64 位记录。
+- 更新通过 0x8004 请求应用正常退出，等待窗口关闭；拒绝或繁忙则提示，不强杀。
+
+来源：[NSIS SetRegView](https://nsis.sourceforge.io/Reference/SetRegView)、[跳过页面](https://nsis.sourceforge.io/Skipping_Pages)。
+
 ## v0.3 新增
 
 - `strategy.rs`：基于物理可用量、占用、待机/系统缓存的纯函数选策。智能模式不选全局工作集或修改页刷新，低压时无操作。

@@ -1,7 +1,7 @@
 //! Native Win32 UI. The UI thread only samples counters; cleanup runs on one worker.
 //! RefCell::try_borrow_mut ignores reentrant modal callbacks rather than aliasing App.
 use crate::{
-    config::{append_report, config_path, Config},
+    config::{append_report, config_path, AutoTrigger, Config},
     model::{gib, CleanReport, MemorySnapshot, Profile},
     platform::{
         clean_with_config, foreground_pid, fullscreen_active, is_elevated, os_error, snapshot, wide,
@@ -952,15 +952,28 @@ impl App {
             self.small_font,
             muted,
         );
+        let trigger = match self.config.auto_trigger {
+            AutoTrigger::Memory => format!(
+                "占用 ≥{}% 持续 {} 秒",
+                self.config.threshold_percent, self.config.sustained_seconds
+            ),
+            AutoTrigger::Interval => format!("每 {} 秒检查", self.config.interval_seconds),
+            AutoTrigger::Either if self.config.interval_seconds > 0 => format!(
+                "占用 ≥{}% 或每 {} 秒",
+                self.config.threshold_percent, self.config.interval_seconds
+            ),
+            AutoTrigger::Either => {
+                format!("占用 ≥{}%（定时未启用）", self.config.threshold_percent)
+            }
+        };
         let auto = format!(
-            "≥ {}% 持续 {} 秒 · 冷却 {} 秒 · {}",
-            self.config.threshold_percent,
-            self.config.sustained_seconds,
+            "{} · 冷却 {} 秒 · {}",
+            trigger,
             self.config.cooldown_seconds,
             if self.config.skip_fullscreen {
-                "全屏时暂停自动优化"
+                "全屏暂停"
             } else {
-                "全屏暂停已关闭"
+                "全屏暂停关闭"
             }
         );
         self.text(
@@ -972,7 +985,7 @@ impl App {
         );
         self.text(
             buffer,
-            "v0.3.0  ·  Ctrl+Alt+M  ·  关闭窗口隐藏到托盘",
+            "v0.4.0  ·  Ctrl+Alt+M  ·  关闭窗口隐藏到托盘",
             self.rect(284, 668, 385, 24),
             self.small_font,
             muted,
@@ -997,9 +1010,43 @@ impl App {
             return;
         }
         let id = item.CtlID as usize;
+        if let Some(color) = self.settings.as_ref().and_then(|p| p.preview_color(id)) {
+            FillRect(item.hDC, &item.rcItem, self.background);
+            rounded(item.hDC, item.rcItem, self.sc(8), color, rgb(218, 225, 236));
+            let brightness =
+                (color & 255) * 299 + ((color >> 8) & 255) * 587 + ((color >> 16) & 255) * 114;
+            let old = SelectObject(item.hDC, self.font);
+            SetBkMode(item.hDC, TRANSPARENT as i32);
+            SetTextColor(
+                item.hDC,
+                if brightness > 160000 {
+                    rgb(20, 30, 45)
+                } else {
+                    rgb(255, 255, 255)
+                },
+            );
+            let mut rect = item.rcItem;
+            DrawTextW(
+                item.hDC,
+                wide("点击选色").as_ptr(),
+                -1,
+                &mut rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            );
+            SelectObject(item.hDC, old);
+            if item.itemState & ODS_FOCUS != 0 {
+                InflateRect(&mut rect, -self.sc(4), -self.sc(4));
+                DrawFocusRect(item.hDC, &rect);
+            }
+            return;
+        }
         let primary = id == CLEAN || id == settings::SAVE;
         let selected = (PROFILE_BASE..PROFILE_BASE + Profile::ALL.len()).contains(&id)
-            && Profile::ALL[id - PROFILE_BASE] == self.config.manual_profile;
+            && Profile::ALL[id - PROFILE_BASE] == self.config.manual_profile
+            || self
+                .settings
+                .as_ref()
+                .is_some_and(|panel| panel.is_selected(id));
         let active = selected || (id == AUTO && self.config.auto_enabled);
         let disabled = item.itemState & ODS_DISABLED != 0;
         let pressed = item.itemState & ODS_SELECTED != 0;
@@ -1272,7 +1319,7 @@ impl App {
         }
     }
 
-    unsafe fn command(&mut self, id: usize, _notification: u16) {
+    unsafe fn command(&mut self, id: usize, notification: u16) {
         match id {
             CLEAN => self.request(false),
             MINIMIZE => {
@@ -1357,7 +1404,11 @@ impl App {
                 SetForegroundWindow(self.hwnd);
             }
             QUIT => self.exit(),
-            _ => {}
+            _ => {
+                if let Some(panel) = self.settings.as_mut() {
+                    panel.command(id, notification);
+                }
+            }
         }
     }
     unsafe fn register_hotkey(&mut self) {
@@ -1387,7 +1438,7 @@ impl App {
         if let Ok(icon) = number_icon(
             self.last_load,
             GetSystemMetrics(SM_CXSMICON),
-            self.config.threshold_percent,
+            &self.config.tray,
         ) {
             self.tray_icon = Some(icon);
         }

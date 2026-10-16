@@ -2,12 +2,13 @@ Unicode True
 !include "MUI2.nsh"
 !include "x64.nsh"
 !ifndef VERSION
-  !define VERSION "0.3.0"
+  !define VERSION "0.4.0"
 !endif
 Name "MemReduct RS"
 OutFile "..\dist\MemReduct-RS-${VERSION}-x64-Setup.exe"
 InstallDir "$PROGRAMFILES64\MemReduct RS"
-InstallDirRegKey HKLM "Software\MemReductRs" "InstallDir"
+Var ExistingInstall
+Var Updating
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 ShowInstDetails show
@@ -22,8 +23,11 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "GPL-3.0-only; MemReduct RS contribu
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\memreduct-rs.exe"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfUpdating
 !insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfUpdating
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE"
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfUpdating
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -38,9 +42,44 @@ Function .onInit
     Abort
   ${EndIf}
   SetRegView 64
+  StrCpy $Updating 0
+  ReadRegStr $ExistingInstall HKLM "Software\MemReductRs" "InstallDir"
+  ${If} $ExistingInstall == ""
+    ReadRegStr $ExistingInstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\MemReductRs" "InstallLocation"
+  ${EndIf}
+  ${If} $ExistingInstall == ""
+    SetRegView 32
+    ReadRegStr $ExistingInstall HKLM "Software\MemReductRs" "InstallDir"
+    SetRegView 64
+  ${EndIf}
+  ${If} $ExistingInstall != ""
+    IfFileExists "$ExistingInstall\memreduct-rs.exe" 0 no_existing_install
+    StrCpy $INSTDIR "$ExistingInstall"
+    StrCpy $Updating 1
+  ${EndIf}
+  no_existing_install:
   FindWindow $0 "MemReductRs.Window.v1"
   ${If} $0 != 0
-    MessageBox MB_ICONEXCLAMATION "请先从托盘菜单退出 MemReduct RS，再安装更新。"
+    ; Request a normal shutdown. A busy cleaner may refuse; never terminate it forcibly.
+    SendMessage $0 0x8004 0 0 /TIMEOUT=2000
+    StrCpy $1 0
+    wait_for_app:
+      Sleep 100
+      FindWindow $0 "MemReductRs.Window.v1"
+      ${If} $0 == 0
+        Goto app_closed
+      ${EndIf}
+      IntOp $1 $1 + 1
+      IntCmp $1 30 app_still_running wait_for_app app_still_running
+    app_still_running:
+      MessageBox MB_ICONEXCLAMATION "程序正在清理或仍有对话框打开，请完成操作并从托盘退出后重试。"
+      Abort
+  ${EndIf}
+  app_closed:
+FunctionEnd
+
+Function SkipIfUpdating
+  ${If} $Updating == 1
     Abort
   ${EndIf}
 FunctionEnd
