@@ -1,0 +1,105 @@
+name: Publish Windows release
+
+on:
+  workflow_run:
+    workflows: [Rust checks and Windows build]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-windows-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Verify and package existing Windows x64 binaries
+        id: package
+        shell: python
+        run: |
+          import hashlib
+          import os
+          from pathlib import Path
+          import subprocess
+          import tomllib
+          import zipfile
+
+          root = Path.cwd()
+          version = tomllib.loads(Path('Cargo.toml').read_text())['package']['version']
+          tag = f'v{version}'
+          if not all(c.isdigit() or c == '.' for c in version):
+              raise SystemExit('Expected a numeric release version')
+          for line in Path('SHA256SUMS.txt').read_text().splitlines():
+              expected, name = line.split(maxsplit=1)
+              actual = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f'Checksum mismatch: {name}')
+
+          dist = Path('dist')
+          dist.mkdir(exist_ok=True)
+          portable = dist / f'memreduct-rs-{version}-windows-x64.zip'
+          with zipfile.ZipFile(portable, 'w', zipfile.ZIP_DEFLATED) as archive:
+              for name in ['memreduct-rs.exe', 'memreduct-cli.exe', 'memreduct-rs.example.toml']:
+                  archive.write(Path('bin/windows-x64') / name, name)
+              for name in ['README.md', 'LICENSE', 'NOTICE.md']:
+                  archive.write(name, name)
+              for path in sorted(Path('docs').rglob('*.md')):
+                  archive.write(path, path.as_posix())
+              sums = ''.join(
+                  f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n'
+                  for p in sorted(Path('bin/windows-x64').glob('*.exe'))
+              )
+              archive.writestr('SHA256SUMS.txt', sums)
+
+          source = dist / f'memreduct-rs-{version}-source.zip'
+          subprocess.run(['git', 'archive', '--format=zip', f'--prefix=memreduct-rs-{version}/',
+                          '-o', str(source), 'HEAD'], check=True)
+          paths = sorted(dist.glob('*.zip'))
+          Path('dist/SHA256SUMS.txt').write_text(''.join(
+              f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in paths
+          ))
+          Path('dist/RELEASE_NOTES.md').write_text('''## MemReduct RS ''' + tag + '''
+
+          Rust 原生 Windows 内存监控与清理工具，参考 Henry++ / Mem Reduct 独立实现，采用 GPL-3.0-only。
+
+          - Windows 10/11 x64 原生中文界面、托盘、全局快捷键。
+          - 三档清理策略、后台工作线程、持续高占用判定、冷却及回差。
+          - CLI、JSON 输出、便携模式、配置文件及日志。
+
+          下载 `windows-x64.zip`，解压后运行 `memreduct-rs.exe`。
+          `source.zip` 包含完整源码；`SHA256SUMS.txt` 用于校验两个 ZIP。
+
+          本次发布的是已交叉编译的 GNU x64 成品，发布流程会校验原始 EXE 哈希。
+          Linux 测试、Windows MSVC 构建及只读 CLI 状态查询由前置 CI 检查。
+          尚未完成真实 Windows 桌面的 GUI、清理效果及性能验收；程序未签名。
+          ''')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'tag={tag}\n')
+      - name: Publish release and assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.package.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; leaving it unchanged."
+            exit 0
+          fi
+          gh release create "$RELEASE_TAG" \
+            --target "$(git rev-parse HEAD)" \
+            --title "MemReduct RS $RELEASE_TAG" \
+            --notes-file dist/RELEASE_NOTES.md \
+            dist/*-windows-x64.zip dist/*-source.zip dist/SHA256SUMS.txt

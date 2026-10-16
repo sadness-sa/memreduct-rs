@@ -1,0 +1,40 @@
+name: Rust checks and Windows build
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - if: runner.os == 'Windows'
+        run: cargo build --release --locked
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $memory = & .\target\release\memreduct-cli.exe status --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $memory.physical_total -le 0) { throw 'Memory status smoke test failed' }
+          if ($memory.physical_available -gt $memory.physical_total) { throw 'Invalid available memory' }
+      - if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: memreduct-rs-windows-x64-msvc
+          path: |
+            target/release/memreduct-rs.exe
+            target/release/memreduct-cli.exe
+            memreduct-rs.example.toml
+            README.md
+            LICENSE
+            NOTICE.md
+          if-no-files-found: error
