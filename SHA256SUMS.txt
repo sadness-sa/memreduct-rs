@@ -1,2 +1,0 @@
-8721fc479ecdc764e7d66e48ba1565747a4af391176de5ab4ede263831776d12  bin/windows-x64/memreduct-cli.exe
-0d58cb98cf53c89f5cc97ffe45d53eb5ba48911391a6539e79c2216b0dc86204  bin/windows-x64/memreduct-rs.exe

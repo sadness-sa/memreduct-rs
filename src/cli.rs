@@ -4,7 +4,7 @@ use memreduct_rs::{
     platform, AppResult,
 };
 
-const HELP: &str = "MemReduct RS CLI 0.1.0\n\
+const HELP: &str = "MemReduct RS CLI 0.2.0\n\
 Usage:\n  memreduct-cli status [--json]\n  memreduct-cli clean [--profile conservative|balanced|aggressive] [--json] [--yes] [--portable]\n  memreduct-cli config [--portable]\n\n\
 Status needs no elevation. Clean requires an elevated terminal.\n\
 Aggressive mode requires --yes and can cause disk IO and temporary stalls.\n\
@@ -86,8 +86,8 @@ fn run(args: Vec<String>) -> Result<i32, (i32, String)> {
                 return Err("强力清理可能引起卡顿和磁盘写入，请添加 --yes 明确执行".into());
             }
             let path = config_path(portable)?;
-            Config::load_or_create(&path)?;
-            let report = platform::clean(profile)?;
+            let config = Config::load_or_create(&path)?;
+            let report = platform::clean_with_config(profile, &config, None)?;
             if json {
                 println!(
                     "{}",
@@ -95,12 +95,9 @@ fn run(args: Vec<String>) -> Result<i32, (i32, String)> {
                 );
             } else {
                 println!("{}", report.summary());
+                println!("{}", report.measurement_details());
                 for op in &report.operations {
-                    println!(
-                        "{}: {}",
-                        op.operation.label(),
-                        op.error.as_deref().unwrap_or("OK")
-                    );
+                    println!("{}", op.detail());
                 }
                 if let Some(error) = &report.measurement_error {
                     eprintln!("{error}");

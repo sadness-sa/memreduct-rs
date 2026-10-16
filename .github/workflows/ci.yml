@@ -7,6 +7,7 @@ permissions:
 jobs:
   check:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -15,26 +16,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
       - if: runner.os == 'Windows'
         run: cargo build --release --locked
       - if: runner.os == 'Windows'
+        name: Validate CLI, manifests and native UI
         shell: pwsh
-        run: |
-          $memory = & .\target\release\memreduct-cli.exe status --json | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $memory.physical_total -le 0) { throw 'Memory status smoke test failed' }
-          if ($memory.physical_available -gt $memory.physical_total) { throw 'Invalid available memory' }
+        run: ./scripts/validate-windows.ps1
+      - if: runner.os == 'Windows'
+        name: Build and test installer
+        shell: pwsh
+        run: ./scripts/build-installer.ps1
       - if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: memreduct-rs-windows-x64-msvc
           path: |
-            target/release/memreduct-rs.exe
-            target/release/memreduct-cli.exe
-            memreduct-rs.example.toml
-            README.md
-            LICENSE
-            NOTICE.md
+            dist/*-Setup.exe
+            dist/SHA256SUMS.txt
+            dist/ui-preview.png
           if-no-files-found: error

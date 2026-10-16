@@ -17,4 +17,11 @@ GPL-3.0-only and is not affiliated with or endorsed by the upstream author.
 
 Dependencies retain their own licenses; Cargo.lock pins the versions used.
 When distributing executables, include this notice, LICENSE and the corresponding
-source code. Both source and executables are provided in the delivery archive.
+source code. Corresponding source and installers are published together on GitHub Releases.
+
+Additional implementation references studied for v0.2.0:
+- IgorMundstein/WinMemoryCleaner: process exclusions, per-process working-set APIs
+  and its administrator manifest. No C# code or binary is bundled.
+- winsiderss/phnt: native system information layouts (ABI reference only).
+- Microsoft Windows SDK documentation: token privileges, EmptyWorkingSet,
+  SetSystemFileCacheSize and application manifests.

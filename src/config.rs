@@ -17,6 +17,10 @@ pub struct Config {
     pub cooldown_seconds: u64,
     pub interval_seconds: u64,
     pub manual_profile: Profile,
+    pub auto_profile: Profile,
+    pub skip_fullscreen: bool,
+    pub minimum_working_set_mib: u32,
+    pub process_exclusions: Vec<String>,
     pub start_minimized: bool,
     pub hotkey_enabled: bool,
 }
@@ -30,7 +34,11 @@ impl Default for Config {
             sustained_seconds: 10,
             cooldown_seconds: 300,
             interval_seconds: 0,
-            manual_profile: Profile::Conservative,
+            manual_profile: Profile::Balanced,
+            auto_profile: Profile::Conservative,
+            skip_fullscreen: true,
+            minimum_working_set_mib: 32,
+            process_exclusions: vec!["obs64.exe".into(), "obs32.exe".into()],
             start_minimized: false,
             hotkey_enabled: true,
         }
@@ -39,6 +47,20 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> AppResult<()> {
+        if self.auto_profile == Profile::Aggressive {
+            return Err("自动清理仅允许 conservative 或 balanced".into());
+        }
+        if !(16..=4096).contains(&self.minimum_working_set_mib) {
+            return Err("minimum_working_set_mib 必须为 16..4096".into());
+        }
+        if self.process_exclusions.len() > 128
+            || self
+                .process_exclusions
+                .iter()
+                .any(|s| s.is_empty() || s.len() > 260 || s.contains(['/', '\\', '\0']))
+        {
+            return Err("process_exclusions 最多 128 个非空进程文件名，不支持路径".into());
+        }
         if !(50..=99).contains(&self.threshold_percent) {
             return Err("threshold_percent 必须为 50..99".into());
         }
@@ -142,6 +164,18 @@ pub fn append_report(path: &Path, report: &crate::model::CleanReport) -> AppResu
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_config_gets_safe_new_options_and_aggressive_auto_is_rejected() {
+        let mut config: Config = toml::from_str("manual_profile = 'conservative'").unwrap();
+        assert_eq!(config.manual_profile, Profile::Conservative);
+        assert_eq!(config.auto_profile, Profile::Conservative);
+        assert!(config.skip_fullscreen);
+        config.auto_profile = Profile::Aggressive;
+        assert!(config.validate().is_err());
+        config.auto_profile = Profile::Balanced;
+        config.process_exclusions = vec!["C:\\game.exe".into()];
+        assert!(config.validate().is_err());
+    }
     #[test]
     fn invalid_config_is_rejected_and_preserved() {
         let dir = std::env::temp_dir().join(format!("memreduct-config-{}", std::process::id()));

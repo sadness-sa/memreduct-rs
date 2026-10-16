@@ -3,3 +3,5 @@
 *.log.1
 /memreduct-rs.toml
 *.tmp
+
+/dist/

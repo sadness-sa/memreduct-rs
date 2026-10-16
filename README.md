@@ -1,95 +1,66 @@
 # MemReduct RS
 
-参考 [Henry++ / Mem Reduct](https://github.com/henrypp/memreduct) 实现的 Rust 原生 Windows 内存监控与清理工具。独立重构项目，非原作者官方版本。
+参考 [Henry++ / Mem Reduct](https://github.com/henrypp/memreduct) 独立实现的轻量 Rust Windows 内存监控与回收工具。非上游官方版本。GPL-3.0-only。
 
-当前版本 **0.1.0**，目标平台 **Windows 10 / 11 x64**。这是包含界面和真实系统调用的首版，尚未完成真实 Windows 桌面验收，不宣称已覆盖原项目全部功能或性能优于原版。
+## 下载安装
 
-## 已实现
+**Windows 10/11 x64 · v0.2.0**：[下载安装程序](https://github.com/sadness-sa/memreduct-rs/releases/download/v0.2.0/MemReduct-RS-0.2.0-x64-Setup.exe)，或进入 [Releases](https://github.com/sadness-sa/memreduct-rs/releases)。不再要求用户解压便携包。
 
-- 原生 Win32 中文界面，每秒刷新物理内存、可用内存、系统提交量和系统缓存。
-- 托盘悬停显示内存使用率，左键恢复窗口，右键清理/退出；关闭和最小化隐藏到托盘。
-- 托盘不可用时保留可见窗口；处理 Explorer 重启后的托盘重建。
-- 保守、均衡、强力三种手动策略，强力操作每次明确确认。
-- 自动清理：高占用持续判定、冷却、回落后再触发；可选定时触发。默认关闭。
-- 全局快捷键 **Ctrl+Alt+M**，使用当前手动策略。
-- 后台单工作线程执行清理；GUI/CLI 通过命名互斥锁避免同时操作内存列表。
-- 按需启用并恢复权限，报告每项 Win32 错误或 NTSTATUS。
-- 配置原子替换、便携模式、JSON 命令行输出、约 1 MiB 轮转日志。
-- GUI 普通权限可监控，通过「管理员重启」处理 UAC；取消提升会保留原实例。
+从桌面或开始菜单启动后，Windows 会自动弹出管理员权限请求（UAC）；同意后才能运行 GUI 和清理。不会关闭或绕过 UAC。安装目录为 Program Files；可从 Windows「已安装的应用」卸载。安装/更新前请从旧版托盘菜单退出，用户配置与日志在卸载后保留。
 
-本工具通过系统接口回收缓存与工作集，不分配巨量内存“挤压”系统，不结束应用进程。
+## 界面与使用
 
-## 运行
+- 浅色卡片、实时占用曲线、物理可用内存、待机缓存和本程序工作集。
+- 「均衡回收」是新安装的默认手动策略：回收可访问的空闲后台进程工作集，再处理系统缓存和低优先级待机页。
+- 点击「优化设置」调整阈值、持续时间、冷却、回差、定时间隔和进程排除列表。
+- 自动模式默认关闭；可选择轻量缓存或均衡回收，不允许强力模式。默认在 Windows 报告全屏 D3D 游戏或演示时暂停自动优化（并非覆盖所有无边框窗口）。
+- Ctrl+Alt+M 触发当前手动策略；关闭窗口隐藏到托盘，托盘菜单可清理、显示和退出。
+- 升级保留旧配置，所以原有的 conservative 选择不会被偷偷改动。旧用户请自行在主界面选择「均衡回收」。
 
-在 [Releases](https://github.com/sadness-sa/memreduct-rs/releases) 下载 `memreduct-rs-0.1.0-windows-x64.zip`；同页提供完整源码压缩包和 SHA-256 校验文件。
+### 为什么之前报权限错误或变化为零
 
-解压便携包，双击 `memreduct-rs.exe`。监控不需要管理员权限，清理需要管理员权限，可点击「管理员重启」。
+`SeProfileSingleProcessPrivilege` 无法添加到普通用户令牌；需要提升后的管理员令牌。新版 GUI 用嵌入清单自动请求管理员权限，清理前也会检查权限；缺少用户权限分配或受组织策略限制时，仍会明确报告原因。
 
-默认配置路径为 `%LOCALAPPDATA%\MemReductRs\config.toml`，首次启动自动生成。点击「编辑配置」，在记事本保存后点击「重载配置」。配置错误会被报告，原配置不会被默认值覆盖。
+Windows 的可用内存包含待机缓存，单纯清理待机页往往不会使可用内存显著增加。新版分别显示物理可用、待机缓存、系统提交量及后台进程工作集变化。进程工作集之和可能重复统计共享页，不能当作精确释放的物理内存。完全失败时只报告失败，不再把 +0.0 MiB 当作清理结果展示。
 
-便携模式将配置和日志写到可执行文件所在目录，因此该目录须可写；两个可执行文件应放在同一目录。
+### 后台进程选择
+
+均衡回收跳过本程序、前台应用及其进程树/同名进程、系统关键进程、其他会话及小工作集进程，默认排除 OBS。通过 150 ms CPU 采样跳过活动明显（CPU 时间增长超过 10 ms）的进程，操作前再次检查当前前台进程。无权访问的进程会记录数量；不会加载驱动、结束进程或分配大块内存挤压系统。
+
+这只是对短暂采样的启发式选择，不等同于识别所有游戏或繁忙程序；建议将游戏、直播、数据库等常用程序加入排除列表。强力模式执行全局工作集清理，不使用这些排除规则，每次明确确认。
+
+| 策略 | 操作 |
+| --- | --- |
+| 轻量缓存 conservative | 低优先级待机页 |
+| 均衡回收 balanced | 空闲后台工作集、系统文件缓存、低优先级待机页 |
+| 深度清理 aggressive | 全局工作集、系统文件缓存、已修改页、全部待机页；可能增加缺页和磁盘 IO |
+
+回收工作集不会修复泄漏或解除应用已提交的内存，后续使用可能重新加载。不能保证降低长期内存用量、提高帧率或消除卡顿。详细对照方法见 [验收记录](docs/VALIDATION.md)。
+
+## 配置与 CLI
+
+配置：`%LOCALAPPDATA%\MemReductRs\config.toml`；日志在配置旁，约 1 MiB 轮转。也支持在可写文件夹运行 `--portable`，使用 EXE 旁的 `memreduct-rs.toml`。GUI 普通启动需要 UAC，CLI `status` 可普通权限运行；CLI `clean` 需要管理员终端。
 
 ```powershell
-.\memreduct-rs.exe --portable
-.\memreduct-rs.exe --portable --minimized
-
-# 普通 PowerShell：查询状态
-.\memreduct-cli.exe status
 .\memreduct-cli.exe status --json
-.\memreduct-cli.exe config --portable
-
-# 管理员 PowerShell：执行清理
-.\memreduct-cli.exe clean --portable
-.\memreduct-cli.exe clean --profile balanced --json --portable
-.\memreduct-cli.exe clean --profile aggressive --yes --portable
+.\memreduct-cli.exe clean --profile balanced --json
+.\memreduct-cli.exe clean --profile aggressive --yes
 ```
 
-CLI 默认使用保守策略。`--yes` 仅用于强力模式的显式确认，不会绕过 Windows 权限。退出码：`0` 全部成功，`1` 执行或配置错误，`2` 参数错误，`3` 部分/全部清理项失败或后置测量失败。JSON 模式成功生成报告时，stdout 只输出 JSON；执行前错误写入 stderr。
+CLI 默认 conservative，`--yes` 只确认强力清理，不提升系统权限。退出码：0 成功，1 执行/配置错误，2 参数错误，3 部分/全部清理项失败或测量失败。每项结果包含耗时和后台工作集统计。无遥测、无后台联网。
 
-## 清理策略
+## 构建与发布
 
-| 策略 | 系统操作 | 使用入口 |
-| --- | --- | --- |
-| 保守 conservative | 清理低优先级待机页 | 手动、自动、CLI |
-| 均衡 balanced | 收缩系统文件缓存工作集 + 清理低优先级待机页 | 手动、CLI |
-| 强力 aggressive | 清空工作集 + 收缩系统缓存 + 刷新已修改页 + 清理全部待机页 | 手动确认或 CLI `--yes` |
-
-Windows 已将大量可回收待机缓存计入“可用内存”，所以清理待机页后可用内存可能几乎不变。清空工作集可能提高短时可用内存，也可能增加后续缺页、磁盘读取和游戏卡顿。结果展示**带正负号的可用内存变化**，包含其他程序的并发活动，不把它叫作精确释放量，也不保证提升速度。
-
-自动策略固定使用保守模式，默认配置为：使用率 ≥85% 连续 10 秒后触发，任何已接受的手动/自动清理后至少冷却 300 秒；占用须回落至 ≤75% 才重新允许高占用触发。失败的清理也记录尝试时间，避免重试风暴。开启定时触发后，即使未回落也可在间隔到期后清理，仍受冷却限制。
-
-日志在配置旁的 `config.log` / `memreduct-rs.log`，每行 JSON，包含逐项结果和 Unix 时间；保留一份 `.log.1` 旧日志。未发起网络请求，不上传遥测。
-
-## 编译
-
-推荐 Windows 安装 Rust stable 的 MSVC 工具链和 Visual Studio Build Tools 的 **Desktop development with C++**（包含 Windows SDK）。锁定依赖文件随源码提供。项目声明 Rust 1.85 及以上，当前验证工具链版本见 `docs/VALIDATION.md`。
+需要 Rust 1.85+、Windows MSVC 工具链及 Windows SDK（包含 rc.exe）。在 VS Developer PowerShell 中运行：
 
 ```powershell
-cargo test --locked
+cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
 cargo build --release --locked
-.\target\release\memreduct-rs.exe
+.\scripts\build-installer.ps1
 ```
 
-GUI 与 CLI 分开构建：GUI 不弹控制台；CLI 可重定向或接入 PowerShell。嵌入清单启用系统 DPI 感知、Common Controls v6 和按调用者权限运行。GNU 工具链构建须安装 MinGW 的 `windres`。
+安装脚本使用 NSIS；缺少 NSIS 时 CI/脚本通过 Chocolatey 安装。GitHub Actions 会在 Linux/Windows 运行测试，在 Windows 上生成两个 EXE、验证管理员清单、启动退出 GUI、构建安装程序并执行安装/卸载冒烟检查。检查全部通过后自动发布本版本 Setup.exe、源码包和 SHA-256。
 
-Linux 交叉编译：
-
-```bash
-rustup target add x86_64-pc-windows-gnu
-# 安装发行版提供的 mingw-w64（gcc、binutils、Windows 头文件与库）
-cargo check --target x86_64-pc-windows-gnu --all-targets --locked
-cargo build --release --target x86_64-pc-windows-gnu --locked
-```
-
-输出在 `target/x86_64-pc-windows-gnu/release/`。纯策略、配置和参数校验的测试也可在 Linux 上运行；真实内存清理只在 Windows 上执行。
-
-## 范围与后续开发
-
-首版未实现原项目的注册表缓存回收、物理页合并、卷缓存刷新、任务计划启动、托盘数字图标、可配置快捷键组合、多语言及安装器；也不兼容 Windows 7。窗口使用系统 DPI 缩放，尚未实现跨显示器实时 DPI 重排。ARM64 尚未验证。
-
-开发架构和与上游的映射见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，Windows 实机验收及性能对比方法见 [docs/VALIDATION.md](docs/VALIDATION.md)。GitHub Actions 包含 Linux 测试和 Windows MSVC 构建、测试及只读状态查询；放入自己的仓库后才会执行。
-
-## 来源与许可证
-
-参考上游提交 `04402de8b6a8ff9d1c5517c675d87c346655323c`（2026-10-16 检查）。保留 GPLv3 许可证文本和原作者归属，详见 [NOTICE.md](NOTICE.md)。本项目采用 **GPL-3.0-only**。
+编译器与 CI 检查不能替代用户真实桌面的权限提示、功能和性能验证。详细实现、参考项目及未完成项见 [架构说明](docs/ARCHITECTURE.md) 和 [验收说明](docs/VALIDATION.md)。
