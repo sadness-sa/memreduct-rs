@@ -34,8 +34,8 @@ impl Default for Config {
             sustained_seconds: 10,
             cooldown_seconds: 300,
             interval_seconds: 0,
-            manual_profile: Profile::Balanced,
-            auto_profile: Profile::Conservative,
+            manual_profile: Profile::Smart,
+            auto_profile: Profile::Smart,
             skip_fullscreen: true,
             minimum_working_set_mib: 32,
             process_exclusions: vec!["obs64.exe".into(), "obs32.exe".into()],
@@ -48,7 +48,7 @@ impl Default for Config {
 impl Config {
     pub fn validate(&self) -> AppResult<()> {
         if self.auto_profile == Profile::Aggressive {
-            return Err("自动清理仅允许 conservative 或 balanced".into());
+            return Err("自动清理不允许 aggressive 全局深度清理".into());
         }
         if !(16..=4096).contains(&self.minimum_working_set_mib) {
             return Err("minimum_working_set_mib 必须为 16..4096".into());
@@ -168,7 +168,7 @@ mod tests {
     fn legacy_config_gets_safe_new_options_and_aggressive_auto_is_rejected() {
         let mut config: Config = toml::from_str("manual_profile = 'conservative'").unwrap();
         assert_eq!(config.manual_profile, Profile::Conservative);
-        assert_eq!(config.auto_profile, Profile::Conservative);
+        assert_eq!(config.auto_profile, Profile::Smart);
         assert!(config.skip_fullscreen);
         config.auto_profile = Profile::Aggressive;
         assert!(config.validate().is_err());

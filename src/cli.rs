@@ -4,8 +4,8 @@ use memreduct_rs::{
     platform, AppResult,
 };
 
-const HELP: &str = "MemReduct RS CLI 0.2.0\n\
-Usage:\n  memreduct-cli status [--json]\n  memreduct-cli clean [--profile conservative|balanced|aggressive] [--json] [--yes] [--portable]\n  memreduct-cli config [--portable]\n\n\
+const HELP: &str = "MemReduct RS CLI 0.3.0\n\
+Usage:\n  memreduct-cli status [--json]\n  memreduct-cli clean [--profile smart|conservative|background|cache|standby|balanced|recovery|aggressive] [--json] [--yes] [--portable]\n  memreduct-cli config [--portable]\n\n\
 Status needs no elevation. Clean requires an elevated terminal.\n\
 Aggressive mode requires --yes and can cause disk IO and temporary stalls.\n\
 --portable stores config/log beside the executable. Exit 0=success, 1=error, 2=invalid arguments, 3=partial/failed cleanup.\n";
@@ -29,7 +29,7 @@ fn run(args: Vec<String>) -> Result<i32, (i32, String)> {
     if !["status", "clean", "config"].contains(&command.as_str()) {
         return Err((2, HELP.into()));
     }
-    let mut profile = Profile::Conservative;
+    let mut profile = Profile::Smart;
     let mut json = false;
     let mut yes = false;
     let mut portable = false;
@@ -95,6 +95,11 @@ fn run(args: Vec<String>) -> Result<i32, (i32, String)> {
                 );
             } else {
                 println!("{}", report.summary());
+                println!(
+                    "策略：{}；{}",
+                    report.selected_profile.label(),
+                    report.decision
+                );
                 println!("{}", report.measurement_details());
                 for op in &report.operations {
                     println!("{}", op.detail());

@@ -19,26 +19,65 @@ pub struct MemorySnapshot {
 #[serde(rename_all = "snake_case")]
 pub enum Profile {
     #[default]
+    Smart,
     Conservative,
+    Background,
+    Cache,
+    Standby,
     Balanced,
+    Recovery,
     Aggressive,
 }
 
 impl Profile {
     pub fn parse(s: &str) -> Result<Self, String> {
         match s {
+            "smart" => Ok(Self::Smart),
             "conservative" => Ok(Self::Conservative),
+            "background" => Ok(Self::Background),
+            "cache" => Ok(Self::Cache),
+            "standby" => Ok(Self::Standby),
             "balanced" => Ok(Self::Balanced),
+            "recovery" => Ok(Self::Recovery),
             "aggressive" => Ok(Self::Aggressive),
-            _ => Err("profile must be conservative, balanced or aggressive".into()),
+            _ => Err("profile must be smart, conservative, background, cache, standby, balanced, recovery or aggressive".into()),
+        }
+    }
+
+    pub const ALL: [Self; 8] = [
+        Self::Smart,
+        Self::Conservative,
+        Self::Background,
+        Self::Cache,
+        Self::Standby,
+        Self::Balanced,
+        Self::Recovery,
+        Self::Aggressive,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Smart => "智能选策",
+            Self::Conservative => "轻量缓存",
+            Self::Background => "后台回收",
+            Self::Cache => "系统缓存",
+            Self::Standby => "待机回收",
+            Self::Balanced => "均衡回收",
+            Self::Recovery => "压力回收",
+            Self::Aggressive => "深度清理",
         }
     }
 
     pub fn operations(self) -> &'static [Operation] {
         use Operation::*;
         match self {
+            Self::Smart => &[],
             Self::Conservative => &[LowPriorityStandby],
+            Self::Background => &[BackgroundWorkingSets],
+            Self::Cache => &[SystemFileCache],
+            Self::Standby => &[Standby],
             Self::Balanced => &[BackgroundWorkingSets, SystemFileCache, LowPriorityStandby],
+            Self::Recovery => &[BackgroundWorkingSets, SystemFileCache, Standby],
             Self::Aggressive => &[WorkingSets, SystemFileCache, ModifiedPages, Standby],
         }
     }
@@ -108,6 +147,8 @@ impl OperationResult {
 #[derive(Debug, Serialize)]
 pub struct CleanReport {
     pub profile: Profile,
+    pub selected_profile: Profile,
+    pub decision: String,
     pub before: MemorySnapshot,
     // A failed follow-up query does not erase the already executed operation results.
     pub after: Option<MemorySnapshot>,
@@ -125,6 +166,9 @@ impl CleanReport {
         self.operations.iter().all(|r| r.error.is_none())
     }
     pub fn summary(&self) -> String {
+        if self.operations.is_empty() {
+            return format!("无需清理 · {}", self.decision);
+        }
         let success = self.operations.iter().filter(|r| r.error.is_none()).count();
         let change = self
             .available_delta()
@@ -182,6 +226,8 @@ mod tests {
     fn reports_partial_failure_and_keeps_negative_measurements() {
         let mut report = CleanReport {
             profile: Profile::Balanced,
+            selected_profile: Profile::Balanced,
+            decision: "manual".into(),
             before: MemorySnapshot {
                 physical_available: 4096,
                 ..Default::default()
@@ -217,5 +263,9 @@ mod tests {
         let summary = report.summary();
         assert!(summary.contains("未完成清理"));
         assert!(!summary.contains("+0.0"));
+        report.operations.clear();
+        report.decision = "当前内存充足".into();
+        assert!(report.summary().contains("无需清理"));
+        assert!(!report.summary().contains("0/0"));
     }
 }

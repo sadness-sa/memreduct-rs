@@ -40,5 +40,5 @@ jobs:
           path: |
             dist/*-Setup.exe
             dist/SHA256SUMS.txt
-            dist/ui-preview.png
+            dist/*-preview.png
           if-no-files-found: error

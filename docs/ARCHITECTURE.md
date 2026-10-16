@@ -1,5 +1,12 @@
 # 架构与参考实现
 
+## v0.3 新增
+
+- `strategy.rs`：基于物理可用量、占用、待机/系统缓存的纯函数选策。智能模式不选全局工作集或修改页刷新，低压时无操作。
+- `tray.rs`：参考上游 `_app_iconcreate` 的绘字位图与 CreateIconIndirect 流程；只保留当前 HICON，更新及退出释放，按系统小图标尺寸绘制数字。
+- `ui.rs`：WS_POPUP 自绘顶部，无原生 caption/border，HTCAPTION 拖动；Windows 11 DWM 圆角与旧系统区域回退；内嵌设置页及自绘策略按钮。
+- `assets/icon.svg`：简洁图标的矢量源；`app.ico` 包含多个尺寸，托盘图标独立生成。
+
 ## 分层
 
 - `platform/windows.rs`：Windows 内存查询、权限启用/恢复、NT 内存列表命令、后台工作集回收、跨进程互斥。
@@ -8,7 +15,7 @@
 - `policy.rs`：单调时间驱动的持续高压、回落重置、冷却和定时状态机。
 - `config.rs`：兼容旧配置的新字段默认值、校验、原子替换及日志轮转。
 - `ui.rs`：原生 Win32 控件与双缓冲 GDI 卡片/曲线/按钮，60 个固定上限的历史点；托盘隐藏后降低采样频率。
-- `settings.rs`：原生模态设置窗口，取消不修改原配置，保存前校验。
+- `settings.rs`：原生内嵌设置页，取消不修改原配置，保存前校验。
 - `installer/` 和 `scripts/`：NSIS x64 安装器、清单与 GUI 冒烟检查、安装/卸载验证。
 
 GUI 线程只采样和绘图。单个 worker 执行回收、CPU 双采样和清理后 500 ms 延迟测量，避免阻塞窗口。GUI/CLI 通过命名互斥锁避免并发清理；强力模式每次确认。

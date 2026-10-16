@@ -7,7 +7,9 @@ use crate::{
         clean_with_config, foreground_pid, fullscreen_active, is_elevated, os_error, snapshot, wide,
     },
     policy::AutoPolicy,
-    settings::edit_settings,
+    settings::{self, SettingsPanel},
+    strategy,
+    tray::{number_icon, NumberIcon},
     AppResult,
 };
 use std::{
@@ -22,7 +24,7 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    Graphics::Gdi::*,
+    Graphics::{Dwm::*, Gdi::*},
     System::{LibraryLoader::GetModuleHandleW, Threading::CreateMutexW},
     UI::{Controls::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
 };
@@ -31,7 +33,9 @@ const CLASS: &str = "MemReductRs.Window.v1";
 const TRAY_MESSAGE: u32 = WM_APP + 1;
 const CLEAN: usize = 101;
 const AUTO: usize = 102;
-const PROFILE: usize = 103;
+const PROFILE_BASE: usize = 120;
+const MINIMIZE: usize = 109;
+const HIDE: usize = 110;
 const OPEN_CONFIG: usize = 104;
 const RELOAD: usize = 105;
 const AUTO_PROFILE: usize = 106;
@@ -105,7 +109,10 @@ struct App {
     status: HWND,
     details: HWND,
     auto_check: HWND,
-    profiles: HWND,
+    profile_buttons: Vec<HWND>,
+    overview_controls: Vec<HWND>,
+    settings: Option<SettingsPanel>,
+    tray_icon: Option<NumberIcon>,
     clean_button: HWND,
     config: Config,
     path: PathBuf,
@@ -220,7 +227,7 @@ pub fn run() -> AppResult<()> {
             .min((GetSystemMetrics(SM_CYSCREEN) - 90) as f64 / 710.0)
             .max(0.75);
         let sc = |n: i32| (n as f64 * scale).round() as i32;
-        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+        let style = WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX;
         let mut rect = RECT {
             left: 0,
             top: 0,
@@ -230,13 +237,18 @@ pub fn run() -> AppResult<()> {
         if AdjustWindowRectEx(&mut rect, style, 0, 0) == 0 {
             return Err(os_error("AdjustWindowRectEx"));
         }
+        let mut work: RECT = zeroed();
+        if SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut work as *mut RECT).cast(), 0) == 0 {
+            work.right = GetSystemMetrics(SM_CXSCREEN);
+            work.bottom = GetSystemMetrics(SM_CYSCREEN);
+        }
         let hwnd = CreateWindowExW(
-            0,
+            WS_EX_APPWINDOW,
             class_name.as_ptr(),
             wide("MemReduct RS · 内存监控").as_ptr(),
             style | WS_CLIPCHILDREN,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
+            work.left + (work.right - work.left - sc(820)) / 2,
+            work.top + (work.bottom - work.top - sc(710)) / 2,
             rect.right - rect.left,
             rect.bottom - rect.top,
             null_mut(),
@@ -247,6 +259,26 @@ pub fn run() -> AppResult<()> {
         if hwnd.is_null() {
             return Err(os_error("CreateWindowExW"));
         }
+        let preference: u32 = 2;
+        if DwmSetWindowAttribute(
+            hwnd,
+            33,
+            (&preference as *const u32).cast(),
+            size_of::<u32>() as u32,
+        ) < 0
+        {
+            let region = CreateRoundRectRgn(0, 0, sc(820) + 1, sc(710) + 1, sc(18), sc(18));
+            if !region.is_null() && SetWindowRgn(hwnd, region, 0) == 0 {
+                DeleteObject(region);
+            }
+        }
+        let margins = MARGINS {
+            cxLeftWidth: 1,
+            cxRightWidth: 1,
+            cyTopHeight: 1,
+            cyBottomHeight: 1,
+        };
+        DwmExtendFrameIntoClientArea(hwnd, &margins);
         let app = App::new(hwnd, config, path, scale);
         let app = match app {
             Ok(app) => app,
@@ -326,6 +358,19 @@ unsafe extern "system" fn window_proc(
                     return 0;
                 }
                 match message {
+                    WM_NCHITTEST => {
+                        let mut point = POINT {
+                            x: lparam as u16 as i16 as i32,
+                            y: (lparam >> 16) as u16 as i16 as i32,
+                        };
+                        ScreenToClient(hwnd, &mut point);
+                        return if point.y < app.sc(80) && point.x < app.sc(712) {
+                            HTCAPTION as LRESULT
+                        } else {
+                            HTCLIENT as LRESULT
+                        };
+                    }
+                    WM_NCLBUTTONDBLCLK if wparam == HTCAPTION as usize => return 0,
                     WM_PAINT => {
                         app.paint();
                         return 0;
@@ -402,7 +447,7 @@ impl App {
             heading_font: null_mut(),
             number_font: null_mut(),
             small_font: null_mut(),
-            background: CreateSolidBrush(rgb(242, 245, 250)),
+            background: CreateSolidBrush(rgb(255, 255, 255)),
             surface: CreateSolidBrush(rgb(255, 255, 255)),
             memory: None,
             history: VecDeque::with_capacity(60),
@@ -412,7 +457,10 @@ impl App {
             status: null_mut(),
             details: null_mut(),
             auto_check: null_mut(),
-            profiles: null_mut(),
+            profile_buttons: Vec::new(),
+            overview_controls: Vec::new(),
+            settings: None,
+            tray_icon: None,
             clean_button: null_mut(),
             config,
             path,
@@ -443,66 +491,53 @@ impl App {
         {
             return Err(os_error("创建界面资源"));
         }
-        app.profiles = app.child(
-            "COMBOBOX",
-            "",
-            CBS_DROPDOWNLIST as u32 | WS_TABSTOP | WS_VSCROLL,
-            44,
-            334,
-            454,
-            180,
-            PROFILE,
-        )?;
-        for text in [
-            "轻量缓存 · 保留应用工作集",
-            "均衡回收 · 后台工作集 + 缓存（推荐）",
-            "深度清理 · 全局工作集 + 全部缓存",
-        ] {
-            SendMessageW(app.profiles, CB_ADDSTRING, 0, wide(text).as_ptr() as LPARAM);
+        for (i, profile) in Profile::ALL.iter().enumerate() {
+            let control = app.child(
+                "BUTTON",
+                profile.label(),
+                WS_TABSTOP | BS_OWNERDRAW as u32,
+                44 + (i % 4) as i32 * 120,
+                330 + (i / 4) as i32 * 36,
+                112,
+                28,
+                PROFILE_BASE + i,
+            )?;
+            app.profile_buttons.push(control);
         }
-        SendMessageW(app.profiles, CB_SETCURSEL, app.profile_index(), 0);
         app.clean_button = app.child(
             "BUTTON",
-            "立即优化",
+            "智能优化",
             WS_TABSTOP | BS_OWNERDRAW as u32,
-            522,
-            328,
-            254,
-            48,
+            546,
+            330,
+            230,
+            64,
             CLEAN,
         )?;
         app.auto_check = app.child(
             "BUTTON",
-            "启用自动优化",
-            WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+            "自动优化",
+            WS_TABSTOP | BS_OWNERDRAW as u32,
             44,
             448,
-            220,
-            28,
+            228,
+            32,
             AUTO,
         )?;
         app.auto_profiles = app.child(
-            "COMBOBOX",
+            "BUTTON",
             "",
-            CBS_DROPDOWNLIST as u32 | WS_TABSTOP | WS_VSCROLL,
+            WS_TABSTOP | BS_OWNERDRAW as u32,
             508,
-            450,
+            448,
             268,
-            120,
+            32,
             AUTO_PROFILE,
         )?;
-        for text in ["轻量缓存（默认）", "均衡回收（后台工作集）"] {
-            SendMessageW(
-                app.auto_profiles,
-                CB_ADDSTRING,
-                0,
-                wide(text).as_ptr() as LPARAM,
-            );
-        }
         app.sync_config_controls();
         app.status = app.child(
             "STATIC",
-            "就绪 · 选择均衡回收，可收缩空闲后台进程工作集。",
+            "就绪 · 智能选策会根据当前内存状态选择回收方式。",
             0,
             44,
             550,
@@ -527,10 +562,10 @@ impl App {
         SendMessageW(app.details, WM_SETFONT, app.small_font as usize, 1);
         for (text, x, w, id) in [
             ("优化设置", 24, 114, OPEN_CONFIG),
-            ("应用设置", 150, 114, RELOAD),
+            ("刷新状态", 150, 114, RELOAD),
             ("退出程序", 682, 114, QUIT),
         ] {
-            app.child(
+            let control = app.child(
                 "BUTTON",
                 text,
                 WS_TABSTOP | BS_OWNERDRAW as u32,
@@ -540,7 +575,37 @@ impl App {
                 30,
                 id,
             )?;
+            app.overview_controls.push(control);
         }
+        app.overview_controls
+            .extend(app.profile_buttons.iter().copied());
+        app.overview_controls.extend([
+            app.clean_button,
+            app.auto_check,
+            app.auto_profiles,
+            app.status,
+            app.details,
+        ]);
+        app.child(
+            "BUTTON",
+            "最小化",
+            WS_TABSTOP | BS_OWNERDRAW as u32,
+            718,
+            20,
+            36,
+            32,
+            MINIMIZE,
+        )?;
+        app.child(
+            "BUTTON",
+            "关闭到托盘",
+            WS_TABSTOP | BS_OWNERDRAW as u32,
+            766,
+            20,
+            36,
+            32,
+            HIDE,
+        )?;
         app.update_tray(NIM_ADD);
         app.register_hotkey();
         if !app.tray_added {
@@ -567,24 +632,43 @@ impl App {
         )
     }
     unsafe fn sync_config_controls(&self) {
-        SendMessageW(
+        SetWindowTextW(
             self.auto_check,
-            BM_SETCHECK,
-            if self.config.auto_enabled {
-                BST_CHECKED
+            wide(if self.config.auto_enabled {
+                "自动优化 · 已开启"
             } else {
-                BST_UNCHECKED
-            } as usize,
-            0,
+                "自动优化 · 已关闭"
+            })
+            .as_ptr(),
         );
-        SendMessageW(self.profiles, CB_SETCURSEL, self.profile_index(), 0);
-        SendMessageW(
+        SetWindowTextW(
+            self.clean_button,
+            wide(if self.config.manual_profile == Profile::Smart {
+                "智能优化"
+            } else {
+                "开始回收"
+            })
+            .as_ptr(),
+        );
+        SetWindowTextW(
             self.auto_profiles,
-            CB_SETCURSEL,
-            usize::from(self.config.auto_profile == Profile::Balanced),
-            0,
+            wide(&format!(
+                "自动策略：{}  ›",
+                self.config.auto_profile.label()
+            ))
+            .as_ptr(),
         );
         InvalidateRect(self.hwnd, null(), 0);
+        for &control in self.profile_buttons.iter().chain([self.auto_check].iter()) {
+            InvalidateRect(control, null(), 0);
+        }
+    }
+    unsafe fn close_settings(&mut self) {
+        self.settings.take();
+        for &control in &self.overview_controls {
+            ShowWindow(control, SW_SHOW);
+        }
+        self.sync_config_controls();
     }
     fn rect(&self, x: i32, y: i32, width: i32, height: i32) -> RECT {
         RECT {
@@ -636,20 +720,20 @@ impl App {
         self.text(
             buffer,
             "MemReduct",
-            self.rect(24, 20, 430, 34),
+            self.rect(66, 17, 430, 34),
             self.heading_font,
             ink,
         );
         self.text(
             buffer,
             "内存监控与智能回收",
-            self.rect(25, 55, 400, 20),
+            self.rect(67, 50, 400, 20),
             self.small_font,
             muted,
         );
         rounded(
             buffer,
-            self.rect(635, 28, 161, 28),
+            self.rect(532, 24, 162, 28),
             self.sc(14),
             rgb(225, 244, 236),
             rgb(225, 244, 236),
@@ -661,17 +745,63 @@ impl App {
             } else {
                 "  需要管理员权限"
             },
-            self.rect(642, 28, 150, 28),
+            self.rect(538, 24, 150, 28),
             self.small_font,
             rgb(27, 128, 90),
         );
-        for (y, height) in [(84, 188), (288, 132), (436, 78), (530, 118)] {
-            rounded(
+        DrawIconEx(
+            buffer,
+            self.sc(25),
+            self.sc(26),
+            LoadIconW(GetModuleHandleW(null()), 101usize as *const u16),
+            self.sc(28),
+            self.sc(28),
+            0,
+            null_mut(),
+            DI_NORMAL,
+        );
+        line(
+            buffer,
+            self.sc(24),
+            self.sc(80),
+            self.sc(796),
+            self.sc(80),
+            rgb(235, 239, 246),
+            1,
+        );
+        if self.settings.is_some() {
+            self.text(
                 buffer,
-                self.rect(24, y, 772, height),
-                self.sc(14),
-                rgb(255, 255, 255),
-                rgb(229, 234, 243),
+                "优化设置",
+                self.rect(44, 96, 680, 30),
+                self.heading_font,
+                ink,
+            );
+            BitBlt(
+                target,
+                0,
+                0,
+                client.right,
+                client.bottom,
+                buffer,
+                0,
+                0,
+                SRCCOPY,
+            );
+            SelectObject(buffer, old);
+            DeleteObject(bitmap);
+            DeleteDC(buffer);
+            return;
+        }
+        for y in [278, 428, 522, 650] {
+            line(
+                buffer,
+                self.sc(44),
+                self.sc(y),
+                self.sc(776),
+                self.sc(y),
+                rgb(235, 239, 246),
+                1,
             );
         }
         self.text(
@@ -782,20 +912,43 @@ impl App {
         }
         self.text(
             buffer,
-            "手动优化",
+            "优化策略",
             self.rect(44, 302, 240, 25),
             self.font,
             ink,
         );
-        let description = match self.config.manual_profile {
-            Profile::Conservative => "仅清理低优先级待机缓存，可用内存可能变化很小。",
-            Profile::Balanced => "跳过前台应用、繁忙进程与排除列表；工作集可按需重新加载。",
-            Profile::Aggressive => "全局工作集与全部待机页回收，执行前需要确认。",
+        let description = if self.config.manual_profile == Profile::Smart {
+            self.memory
+                .map(|m| {
+                    let plan = strategy::select(Profile::Smart, &m, &self.config);
+                    format!(
+                        "当前建议：{} · {}",
+                        if plan.operations.is_empty() {
+                            "无需回收"
+                        } else {
+                            plan.selected.label()
+                        },
+                        plan.reason
+                    )
+                })
+                .unwrap_or_else(|| "采样后自动选择合适的回收策略".into())
+        } else {
+            match self.config.manual_profile {
+                Profile::Conservative => "仅处理低优先级待机页，保留应用工作集。",
+                Profile::Background => "仅回收空闲后台进程；排除前台进程树和用户列表。",
+                Profile::Cache => "仅收缩系统文件缓存工作集。",
+                Profile::Standby => "处理全部待机缓存，已计入可用内存的页面不重复计算。",
+                Profile::Balanced => "空闲后台工作集 + 系统缓存 + 低优先级待机页。",
+                Profile::Recovery => "内存压力回收：空闲后台工作集 + 系统缓存 + 全部待机页。",
+                Profile::Aggressive => "全局工作集 + 修改页 + 全部缓存；每次确认，不使用进程排除。",
+                Profile::Smart => unreachable!(),
+            }
+            .into()
         };
         self.text(
             buffer,
-            description,
-            self.rect(44, 386, 732, 24),
+            &description,
+            self.rect(44, 399, 732, 22),
             self.small_font,
             muted,
         );
@@ -819,7 +972,7 @@ impl App {
         );
         self.text(
             buffer,
-            "v0.2.0  ·  Ctrl+Alt+M  ·  关闭窗口隐藏到托盘",
+            "v0.3.0  ·  Ctrl+Alt+M  ·  关闭窗口隐藏到托盘",
             self.rect(284, 668, 385, 24),
             self.small_font,
             muted,
@@ -843,53 +996,99 @@ impl App {
         if item.CtlType != ODT_BUTTON {
             return;
         }
-        let primary = item.CtlID == CLEAN as u32;
+        let id = item.CtlID as usize;
+        let primary = id == CLEAN || id == settings::SAVE;
+        let selected = (PROFILE_BASE..PROFILE_BASE + Profile::ALL.len()).contains(&id)
+            && Profile::ALL[id - PROFILE_BASE] == self.config.manual_profile;
+        let active = selected || (id == AUTO && self.config.auto_enabled);
         let disabled = item.itemState & ODS_DISABLED != 0;
         let pressed = item.itemState & ODS_SELECTED != 0;
+        let chrome = matches!(id, MINIMIZE | HIDE);
         let fill = if disabled {
             rgb(193, 204, 227)
+        } else if chrome && pressed && id == HIDE {
+            rgb(254, 226, 226)
         } else if primary && pressed {
             rgb(39, 73, 199)
         } else if primary {
             rgb(59, 100, 245)
+        } else if active {
+            rgb(232, 238, 255)
         } else if pressed {
             rgb(226, 233, 246)
-        } else {
+        } else if chrome {
             rgb(255, 255, 255)
+        } else {
+            rgb(246, 248, 252)
         };
         FillRect(item.hDC, &item.rcItem, self.background);
-        rounded(
-            item.hDC,
-            item.rcItem,
-            self.sc(9),
-            fill,
-            if primary { fill } else { rgb(222, 229, 240) },
-        );
-        let mut label = [0u16; 128];
-        GetWindowTextW(item.hwndItem, label.as_mut_ptr(), label.len() as i32);
-        let old = SelectObject(item.hDC, self.font);
-        SetBkMode(item.hDC, TRANSPARENT as i32);
-        SetTextColor(
-            item.hDC,
-            if primary {
-                rgb(255, 255, 255)
+        rounded(item.hDC, item.rcItem, self.sc(8), fill, fill);
+        if chrome {
+            let rect = item.rcItem;
+            let cx = (rect.left + rect.right) / 2;
+            let cy = (rect.top + rect.bottom) / 2;
+            let d = self.sc(5);
+            let color = rgb(70, 82, 104);
+            if id == MINIMIZE {
+                line(
+                    item.hDC,
+                    cx - d,
+                    cy,
+                    cx + d + 1,
+                    cy,
+                    color,
+                    self.sc(1).max(1),
+                );
             } else {
-                rgb(54, 68, 94)
-            },
-        );
-        let mut rect = item.rcItem;
-        DrawTextW(
-            item.hDC,
-            label.as_ptr(),
-            -1,
-            &mut rect,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-        );
+                line(
+                    item.hDC,
+                    cx - d,
+                    cy - d,
+                    cx + d + 1,
+                    cy + d + 1,
+                    color,
+                    self.sc(1).max(1),
+                );
+                line(
+                    item.hDC,
+                    cx - d,
+                    cy + d,
+                    cx + d + 1,
+                    cy - d - 1,
+                    color,
+                    self.sc(1).max(1),
+                );
+            }
+        } else {
+            let mut label = [0u16; 128];
+            GetWindowTextW(item.hwndItem, label.as_mut_ptr(), label.len() as i32);
+            let old = SelectObject(item.hDC, self.font);
+            SetBkMode(item.hDC, TRANSPARENT as i32);
+            SetTextColor(
+                item.hDC,
+                if primary {
+                    rgb(255, 255, 255)
+                } else if active {
+                    rgb(59, 100, 245)
+                } else {
+                    rgb(74, 85, 108)
+                },
+            );
+            let mut rect = item.rcItem;
+            DrawTextW(
+                item.hDC,
+                label.as_ptr(),
+                -1,
+                &mut rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            );
+            SelectObject(item.hDC, old);
+        }
         if item.itemState & ODS_FOCUS != 0 {
+            let mut rect = item.rcItem;
             InflateRect(&mut rect, -self.sc(4), -self.sc(4));
             DrawFocusRect(item.hDC, &rect);
         }
-        SelectObject(item.hDC, old);
     }
     fn sc(&self, n: i32) -> i32 {
         (n as f64 * self.scale).round() as i32
@@ -926,13 +1125,6 @@ impl App {
         SendMessageW(child, WM_SETFONT, self.font as usize, 1);
         Ok(child)
     }
-    fn profile_index(&self) -> usize {
-        match self.config.manual_profile {
-            Profile::Conservative => 0,
-            Profile::Balanced => 1,
-            Profile::Aggressive => 2,
-        }
-    }
     unsafe fn set_status(&self, text: &str) {
         SetWindowTextW(self.status, wide(text).as_ptr());
     }
@@ -945,7 +1137,14 @@ impl App {
                 match result {
                     Ok(report) => {
                         self.set_status(&report.summary());
-                        let mut lines = vec![report.measurement_details()];
+                        let mut lines = vec![
+                            format!(
+                                "选用{}：{}",
+                                report.selected_profile.label(),
+                                report.decision
+                            ),
+                            report.measurement_details(),
+                        ];
                         lines.extend(report.operations.iter().map(|op| op.detail()));
                         if let Some(e) = &report.measurement_error {
                             lines.push(format!("测量失败：{e}"));
@@ -1016,8 +1215,12 @@ impl App {
         }
         self.history.push_back(m.load_percent);
         let rect = self.rect(24, 84, 772, 188);
-        if IsWindowVisible(self.hwnd) != 0 {
+        if IsWindowVisible(self.hwnd) != 0 && self.settings.is_none() {
             InvalidateRect(self.hwnd, &rect, 0);
+            if self.config.manual_profile == Profile::Smart {
+                let reason = self.rect(44, 399, 732, 22);
+                InvalidateRect(self.hwnd, &reason, 0);
+            }
         }
         if self.last_load != Some(m.load_percent) {
             self.last_load = Some(m.load_percent);
@@ -1069,60 +1272,84 @@ impl App {
         }
     }
 
-    unsafe fn command(&mut self, id: usize, notification: u16) {
+    unsafe fn command(&mut self, id: usize, _notification: u16) {
         match id {
             CLEAN => self.request(false),
+            MINIMIZE => {
+                ShowWindow(self.hwnd, SW_MINIMIZE);
+            }
+            HIDE => self.hide_or_exit(),
             AUTO => {
                 let mut config = self.config.clone();
-                config.auto_enabled =
-                    SendMessageW(self.auto_check, BM_GETCHECK, 0, 0) == BST_CHECKED as isize;
+                config.auto_enabled = !config.auto_enabled;
                 self.save_config(config);
+                self.sync_config_controls();
                 self.policy.reconfigure(self.clock.elapsed().as_secs());
             }
-            AUTO_PROFILE if notification == CBN_SELCHANGE as u16 => {
+            AUTO_PROFILE => {
+                const OPTIONS: [Profile; 4] = [
+                    Profile::Smart,
+                    Profile::Conservative,
+                    Profile::Balanced,
+                    Profile::Recovery,
+                ];
                 let mut config = self.config.clone();
-                config.auto_profile = if SendMessageW(self.auto_profiles, CB_GETCURSEL, 0, 0) == 1 {
-                    Profile::Balanced
-                } else {
-                    Profile::Conservative
-                };
+                let index = OPTIONS
+                    .iter()
+                    .position(|p| *p == config.auto_profile)
+                    .unwrap_or(3);
+                config.auto_profile = OPTIONS[(index + 1) % OPTIONS.len()];
                 self.save_config(config);
+                self.sync_config_controls();
             }
-            PROFILE if notification == CBN_SELCHANGE as u16 => {
+            id if (PROFILE_BASE..PROFILE_BASE + Profile::ALL.len()).contains(&id) => {
                 let mut config = self.config.clone();
-                config.manual_profile = match SendMessageW(self.profiles, CB_GETCURSEL, 0, 0) {
-                    1 => Profile::Balanced,
-                    2 => Profile::Aggressive,
-                    _ => Profile::Conservative,
-                };
+                config.manual_profile = Profile::ALL[id - PROFILE_BASE];
+                if config.manual_profile == Profile::Smart {
+                    config.auto_profile = Profile::Smart;
+                }
                 self.save_config(config);
-                InvalidateRect(self.hwnd, null(), 0);
+                self.sync_config_controls();
             }
             OPEN_CONFIG => {
                 if self.busy {
-                    self.set_status("请在清理完成后调整设置。");
+                    self.set_status("请在回收完成后调整设置。");
                     return;
                 }
-                if let Some(config) = edit_settings(self.hwnd, self.font, &self.config) {
-                    self.save_config(config);
-                    self.sync_config_controls();
-                    self.policy.reconfigure(self.clock.elapsed().as_secs());
+                if self.settings.is_none() {
+                    match SettingsPanel::new(self.hwnd, self.font, self.scale, &self.config) {
+                        Ok(panel) => {
+                            for &control in &self.overview_controls {
+                                ShowWindow(control, SW_HIDE);
+                            }
+                            self.settings = Some(panel);
+                            InvalidateRect(self.hwnd, null(), 0);
+                        }
+                        Err(error) => self.set_status(&error),
+                    }
                 }
             }
-            RELOAD => {
-                if self.busy {
-                    self.set_status("请在清理完成后重载配置。");
-                    return;
-                }
-                match Config::load_or_create(&self.path) {
-                    Ok(c) => {
-                        self.config = c;
-                        self.policy.reconfigure(self.clock.elapsed().as_secs());
-                        self.sync_config_controls();
-                        self.set_status("已重载配置。");
-                        self.register_hotkey();
+            settings::SAVE | 1 => {
+                if let Some(panel) = &self.settings {
+                    match panel.read().and_then(|config| {
+                        config.save(&self.path)?;
+                        Ok(config)
+                    }) {
+                        Ok(config) => {
+                            self.config = config;
+                            self.policy.reconfigure(self.clock.elapsed().as_secs());
+                            self.close_settings();
+                            self.update_tray(NIM_MODIFY);
+                            self.set_status("设置已保存。");
+                        }
+                        Err(error) => panel.error(&error),
                     }
-                    Err(e) => self.set_status(&e),
+                }
+            }
+            settings::CANCEL | 2 if self.settings.is_some() => self.close_settings(),
+            RELOAD => {
+                if let Ok(memory) = snapshot() {
+                    self.render_memory(memory);
                 }
             }
             SHOW => {
@@ -1157,7 +1384,18 @@ impl App {
         data.uID = 1;
         data.uFlags = NIF_MESSAGE | NIF_TIP | NIF_ICON;
         data.uCallbackMessage = TRAY_MESSAGE;
-        data.hIcon = LoadIconW(GetModuleHandleW(null()), 101usize as *const u16);
+        if let Ok(icon) = number_icon(
+            self.last_load,
+            GetSystemMetrics(SM_CXSMICON),
+            self.config.threshold_percent,
+        ) {
+            self.tray_icon = Some(icon);
+        }
+        data.hIcon = self
+            .tray_icon
+            .as_ref()
+            .map(|i| i.0)
+            .unwrap_or_else(|| LoadIconW(GetModuleHandleW(null()), 101usize as *const u16));
         let tip = wide(&format!(
             "MemReduct RS | 物理内存 {}% | Ctrl+Alt+M",
             self.last_load.unwrap_or(0)

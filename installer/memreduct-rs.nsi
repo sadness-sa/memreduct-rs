@@ -2,7 +2,7 @@ Unicode True
 !include "MUI2.nsh"
 !include "x64.nsh"
 !ifndef VERSION
-  !define VERSION "0.2.0"
+  !define VERSION "0.3.0"
 !endif
 Name "MemReduct RS"
 OutFile "..\dist\MemReduct-RS-${VERSION}-x64-Setup.exe"

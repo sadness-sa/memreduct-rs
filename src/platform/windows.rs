@@ -4,7 +4,7 @@ use crate::{
     config::Config,
     model::{CleanReport, MemorySnapshot, Operation, OperationResult, ProcessTrimStats, Profile},
     selection::{excluded_name, protected_family, ProcessEntry},
-    AppResult,
+    strategy, AppResult,
 };
 use std::{
     ffi::c_void,
@@ -241,8 +241,9 @@ pub fn clean_with_config(
     let _lock = CleanerLock::acquire()?;
     let before = snapshot()?;
     let started = Instant::now();
+    let plan = strategy::select(profile, &before, config);
     let mut operations = Vec::new();
-    for &operation in profile.operations() {
+    for &operation in &plan.operations {
         let timer = Instant::now();
         let result = if operation == Operation::BackgroundWorkingSets {
             trim_background(config, protected_pid).map(Some)
@@ -269,11 +270,15 @@ pub fn clean_with_config(
         });
     }
     // Give counters time to settle on the worker, never block the UI thread.
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    if !operations.is_empty() {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
     let measured = snapshot();
     let measurement_error = measured.as_ref().err().cloned();
     Ok(CleanReport {
         profile,
+        selected_profile: plan.selected,
+        decision: plan.reason,
         before,
         after: measured.ok(),
         measurement_error,

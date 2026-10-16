@@ -1,4 +1,4 @@
-# v0.2 开发需求与后续计划
+# v0.3 开发需求与后续计划
 
 ## 用户目标
 
@@ -18,9 +18,10 @@
 | F08 | TOML 配置、严格验证、便携存储、原子替换 | `config.rs` |
 | F09 | JSON 状态/结果、明确 CLI 退出码 | `cli.rs` |
 | F10 | 保留逐项结果、带符号内存变化、轮转日志 | `model.rs`、`config.rs` |
-
 | F11 | 均衡模式筛选空闲后台进程，排除前台进程树与用户列表 | `selection.rs`、`platform/windows.rs` |
 | F12 | 可视化设置、现代卡片界面、管理员安装器与卸载 | `settings.rs`、`ui.rs`、`installer/` |
+| F13 | 一体化无系统标题栏界面与内嵌设置，数字托盘 | `ui.rs`、`settings.rs`、`tray.rs` |
+| F14 | 智能选策与 7 种手动策略，展示选策理由 | `strategy.rs`、`model.rs` |
 
 以上“实现”指源码路径已具备，运行验收状态以 `VALIDATION.md` 为准。
 

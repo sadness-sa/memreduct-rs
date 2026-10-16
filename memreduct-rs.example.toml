@@ -6,9 +6,10 @@ hysteresis_percent = 10
 sustained_seconds = 10
 cooldown_seconds = 300
 interval_seconds = 0
-manual_profile = "balanced"
-# Auto permits conservative or balanced, never aggressive.
-auto_profile = "conservative"
+manual_profile = "smart"
+# Smart selects the right non-global strategy from current memory counters.
+# Auto permits all strategies except aggressive.
+auto_profile = "smart"
 skip_fullscreen = true
 minimum_working_set_mib = 32
 # Exact executable names, case insensitive; foreground process family is always excluded.
